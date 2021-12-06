@@ -1,4 +1,4 @@
-const knexService = require('../knexService');
+const knexService = require('./knexService');
 
 module.exports = class CustomerService {
     constructor() {

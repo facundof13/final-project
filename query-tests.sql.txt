@@ -1,0 +1,185 @@
+-- 1. What are the 20 top-selling products at each store?
+
+SELECT
+	store_id, name, quantity
+FROM (
+	SELECT
+		row_number() OVER (PARTITION BY co.store_id ORDER BY oi.quantity DESC) AS r,
+		*
+	FROM
+		order_items oi
+		JOIN customer_orders co ON co.order_id = oi.order_id
+		join product p on p.upc_code = oi.upc_code) top_20
+		where top_20.r <= 20;
+
+-- 2. What are the 20 top-selling products in each state?
+SELECT
+	location_code, name, quantity
+FROM (
+	SELECT
+		row_number() OVER (PARTITION BY s.location_code ORDER BY oi.quantity DESC) AS r,
+		*
+	FROM
+		order_items oi
+		JOIN customer_orders co ON co.order_id = oi.order_id
+		join product p on p.upc_code = oi.upc_code
+		join store s on s.id = co.store_id
+		) top_20
+		where top_20.r <= 20;
+
+-- 3. What are the 5 stores with the most sales so far this year?
+select store_id, count(customer_id) from customer_orders
+group by store_id
+order by count desc
+limit 5;
+
+-- 4. In how many stores does Nvidia outsell AMD?
+SELECT
+	co.store_id,
+	coalesce(nv_sum, 0) AS nvidia_total_sales,
+	coalesce(amd_sum, 0) AS amd_total_sales
+FROM
+	order_items oi
+	JOIN customer_orders co ON co.order_id = oi.order_id
+	JOIN product_brand pb ON pb.upc_code = oi.upc_code
+	LEFT JOIN (
+		SELECT
+			co.store_id,
+			sum(quantity) AS nv_sum
+		FROM
+			order_items oi
+			JOIN customer_orders co ON co.order_id = oi.order_id
+			JOIN product_brand pb ON pb.upc_code = oi.upc_code
+		WHERE
+			pb.brand_name = 'Nvidia'
+		GROUP BY
+			co.store_id) AS nsc ON nsc.store_id = co.store_id
+	LEFT JOIN (
+		SELECT
+			co.store_id,
+			sum(quantity) AS amd_sum
+		FROM
+			order_items oi
+			JOIN customer_orders co ON co.order_id = oi.order_id
+			JOIN product_brand pb ON pb.upc_code = oi.upc_code
+		WHERE
+			pb.brand_name = 'AMD'
+		GROUP BY
+			co.store_id) AS amdsc ON amdsc.store_id = co.store_id
+WHERE
+	co.store_id IS NOT NULL
+	AND coalesce(nv_sum, 0) > coalesce(amd_sum, 0)
+GROUP BY
+	co.store_id,
+	nv_sum,
+	amd_sum;
+
+-- 5. What are the top 3 types of products that customers buy in addition to Video Cards?
+SELECT
+	pt.type,
+	sum(quantity)
+FROM
+	"order" o
+	JOIN order_items oi ON oi.order_id = o.id
+	JOIN product_type pt ON pt.upc_code = oi.upc_code
+	JOIN customer_orders co ON co.order_id = oi.order_id
+WHERE
+	oi.order_id in( SELECT DISTINCT
+			oi.order_id FROM order_items oi
+			JOIN customer_orders co ON oi.order_id = co.order_id
+			JOIN product_type pt ON pt.upc_code = oi.upc_code
+		WHERE
+			TYPE = 'Video Cards')
+	AND TYPE != 'Video Cards'
+GROUP BY
+	pt. "type"
+ORDER BY
+	sum DESC
+LIMIT 3;
+
+-- 6. How often (e.g., a percentage) are processors and memory & storage purchased together
+SELECT
+	(numerator.count::decimal / denominator.count::decimal)::decimal * 100
+FROM (
+	SELECT
+		count(co.order_id)
+	FROM
+		customer_orders co
+	WHERE
+		co.order_id in( SELECT DISTINCT
+				(co.order_id)
+				FROM order_items oi
+				JOIN product_type pt ON oi.upc_code = pt.upc_code
+				JOIN customer_orders co ON co.order_id = oi.order_id
+			WHERE
+				TYPE = 'Memory & Storage')
+		AND co.order_id in( SELECT DISTINCT
+				(co.order_id)
+				FROM order_items oi
+				JOIN product_type pt ON oi.upc_code = pt.upc_code
+				JOIN customer_orders co ON co.order_id = oi.order_id
+			WHERE
+				TYPE = 'Processors')) AS numerator, (
+		SELECT
+			count(DISTINCT co.order_id)
+		FROM
+			customer_orders co) AS denominator;
+
+-- 7. Which month(s) do Video Cards sell the best?
+SELECT
+	to_char(to_date(extract::text, 'MM'), 'Month') AS month,
+	sum
+FROM (
+	SELECT
+		EXTRACT(month FROM date_placed),
+		sum(sum)
+	FROM
+		"order" o
+		JOIN customer_orders co ON co.order_id = o.id
+		JOIN ( SELECT DISTINCT
+				oi.order_id,
+				sum(quantity)
+			FROM
+				order_items oi
+				JOIN product_type pt ON pt.upc_code = oi.upc_code
+				JOIN customer_orders co ON co.order_id = oi.order_id
+			WHERE
+				TYPE = 'Video Cards'
+			GROUP BY
+				oi.order_id) AS video_cards ON video_cards.order_id = o.id
+		GROUP BY
+			extract(month FROM date_placed)) AS results
+WHERE
+	results.sum = (
+		SELECT
+			max(sum)
+		FROM (
+			SELECT
+				sum(sum)
+			FROM ( SELECT DISTINCT
+					oi.order_id,
+					sum(quantity)
+				FROM
+					order_items oi
+					JOIN product_type pt ON pt.upc_code = oi.upc_code
+					JOIN customer_orders co ON co.order_id = oi.order_id
+				WHERE
+					TYPE = 'Video Cards'
+				GROUP BY
+					oi.order_id) AS sums
+				JOIN "order" o ON o.id = sums.order_id
+			GROUP BY
+				extract(month FROM date_placed)) AS max_sum)
+	ORDER BY
+		sum DESC;
+
+-- 8. Find those products that are out of stock at every store in Georgia.
+SELECT
+	*
+FROM
+	stocks
+	JOIN store ON store.id = stocks.store_id
+WHERE
+	quantity = 0
+	AND store.address LIKE '%GA%';
+
